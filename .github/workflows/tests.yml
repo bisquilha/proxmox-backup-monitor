@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Backup monitor
+        run: python tests/test_pve_backup_monitor.py src/pve-backup-monitor.py
+      - name: Restore tester
+        run: python tests/test_restore_tester.py src/pve-restore-tester.py
+      - name: Zabbix template (monitor)
+        run: python tests/check_zbx_template.py zabbix/zbx_template_pve_backup_monitor_7.4.yaml src/pve-backup-monitor.py
+      - name: Zabbix template (restore tester)
+        run: python tests/check_zbx_template_tester.py zabbix/zbx_template_pve_restore_tester_7.4.yaml
+      - name: Grafana dashboard is generated, not hand-edited
+        run: |
+          python tools/gen_grafana_dashboard.py /tmp/dashboard.json
+          cmp /tmp/dashboard.json grafana/dashboard_pve_backup.json

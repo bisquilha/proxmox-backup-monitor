@@ -1,5 +1,7 @@
 # Proxmox Backup Monitor & Automated Restore Tester
 
+[![tests](https://github.com/bisquilha/proxmox-backup-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/bisquilha/proxmox-backup-monitor/actions/workflows/tests.yml)
+
 > A backup that was never restored is just a hope.
 
 Two small Python tools (standard library only) that answer, every minute, two questions about a Proxmox VE environment:
