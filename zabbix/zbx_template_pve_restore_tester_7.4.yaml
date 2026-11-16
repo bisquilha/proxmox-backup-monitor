@@ -1,0 +1,308 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: 40b97be82f63433a860593299737bd55
+      name: Templates/Homelab
+  templates:
+    - uuid: b991920f757e4ceaa5da3ee55853b4c3
+      template: 'PVE Restore Tester'
+      name: 'PVE Restore Tester'
+      description: |
+        Le o tests.json gerado por /usr/local/bin/pve-restore-tester.py (so no host que roda o testador, pve3)
+        via agent2 (vfs.file.contents). Resume o resultado da verificacao noturna dos backups no NAS
+        (integridade com 'vma verify' e, se habilitado, restore real em VM temporaria sem rede).
+        Quem entra no teste e controlado por tag no Proxmox: so as VMs marcadas com a tag testar (sem-backup sempre fica de fora).
+      groups:
+        - name: Templates/Homelab
+      items:
+        - uuid: f93f187b492a41d2ab883b8baa108914
+          name: 'PVE testes: JSON de resultados'
+          key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          delay: 1m
+          history: 1d
+          trends: '0'
+          value_type: TEXT
+          description: 'Item mestre: todo o resto e derivado dele (dependent items).'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: db98205a05e24dfd89f4be2dcb01059e
+          name: 'PVE testes: gerado em'
+          type: DEPENDENT
+          key: 'pve.tests.generated'
+          delay: '0'
+          history: 7d
+          units: 'unixtime'
+          description: 'Momento em que o testador regravou o tests.json (a cada 5 min).'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.generated'
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: 087fed2cbd214ce88ec55338d5353edf
+          name: 'PVE testes: VMs elegiveis a teste'
+          type: DEPENDENT
+          key: 'pve.tests.vms'
+          delay: '0'
+          history: 90d
+          description: 'VMs marcadas com a tag testar no Proxmox, com backup recente e nao isentas (sem-backup).'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.vms'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: 3ecb7622fe884a9587b7845afabbcab5
+          name: 'PVE testes: VMs com teste OK'
+          type: DEPENDENT
+          key: 'pve.tests.ok'
+          delay: '0'
+          history: 90d
+          description: 'Elegiveis que ja tiveram pelo menos um teste bem-sucedido.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.tested_ok'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: ed096a9d7fbf4d6880b059c1e331dc73
+          name: 'PVE testes: VMs com teste falhando'
+          type: DEPENDENT
+          key: 'pve.tests.failed'
+          delay: '0'
+          history: 90d
+          description: 'Elegiveis cujo ultimo teste falhou.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.failed'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: 6c14ef1a4a9a431982e11f8b8c7516ef
+          name: 'PVE testes: VMs nunca testadas'
+          type: DEPENDENT
+          key: 'pve.tests.never'
+          delay: '0'
+          history: 90d
+          description: 'Elegiveis sem nenhum teste bem-sucedido e sem falha registrada.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.never'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: 3127e647d2c14cbf8a04b2781b471425
+          name: 'PVE testes: VMs com teste atrasado'
+          type: DEPENDENT
+          key: 'pve.tests.overdue'
+          delay: '0'
+          history: 90d
+          description: 'Ultimo teste OK mais velho que overdue_days (35), ou nunca testada ha mais que isso.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.overdue'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: d06c2812a56d4a3babf3067fa48a8455
+          name: 'PVE testes: idade do teste OK mais antigo'
+          type: DEPENDENT
+          key: 'pve.tests.oldest_ok_days'
+          delay: '0'
+          history: 90d
+          value_type: FLOAT
+          units: '!dias'
+          description: '-1 quando nao ha nenhum teste OK ainda.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.oldest_ok_days'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: a10610854a684d32a19b7911c1cfc4de
+          name: 'PVE testes: VMs dispensadas de teste'
+          type: DEPENDENT
+          key: 'pve.tests.skipped'
+          delay: '0'
+          history: 90d
+          description: 'Sem a tag testar, isentas (sem-backup), sem job, VM removida, sem estado do host no NAS ou backup muito antigo.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.skipped'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: 65c52853ce7a474db900a018d8afaeff
+          name: 'PVE testes: ultima execucao'
+          type: DEPENDENT
+          key: 'pve.tests.last_run_ts'
+          delay: '0'
+          history: 90d
+          units: 'unixtime'
+          description: 'Ultima vez que o --run noturno terminou (0 = nunca rodou).'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.last_run_ts'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: 11ba8d9cf8a14f3e865d6c9dba884669
+          name: 'PVE testes: resultado da ultima execucao'
+          type: DEPENDENT
+          key: 'pve.tests.last_run_result'
+          delay: '0'
+          history: 90d
+          trends: '0'
+          value_type: CHAR
+          description: 'ok, failed ou none (nenhum teste devido).'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.last_run_result'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: dffa7ed3dc694a11ab062629c4d2cf0f
+          name: 'PVE testes: VMs de teste nao removidas'
+          type: DEPENDENT
+          key: 'pve.tests.cleanup_pending'
+          delay: '0'
+          history: 90d
+          description: 'VMs rt-* (VMID 9000-9099) que ficaram para tras e ocupam disco/RAM. Ver: qm list | grep rt-'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.cleanup_pending'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+        - uuid: f71caf3be0214e05b785aeb3ef519cd2
+          name: 'PVE testes: restore real habilitado'
+          type: DEPENDENT
+          key: 'pve.tests.restore_enabled'
+          delay: '0'
+          history: 90d
+          description: '1 = o testador tambem restaura e liga VMs; 0 = so verifica a integridade dos arquivos.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.summary.restore_enabled'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'
+          tags:
+            - tag: component
+              value: backup-test
+  triggers:
+    - uuid: 6833237fba6848a1b0c3078fd5a16cc3
+      expression: 'last(/PVE Restore Tester/pve.tests.failed)>0'
+      name: 'Teste de backup falhou em {HOST.NAME}'
+      priority: HIGH
+      description: 'Pelo menos uma VM teve o ultimo teste (integridade ou restore) com falha. Quais: painel de TV ou ''pve-restore-tester.py --status'' no pve3.'
+      tags:
+        - tag: scope
+          value: backup-test
+    - uuid: d92908f6a51c4a358e9fabf4ec1ccbf7
+      expression: 'last(/PVE Restore Tester/pve.tests.cleanup_pending)>0'
+      name: 'VM de teste de restore nao foi removida em {HOST.NAME}'
+      priority: HIGH
+      description: 'Sobrou uma VM rt-* (VMID 9000-9099). Conferir com ''qm list | grep rt-'' e remover com ''qm stop N; qm destroy N --purge''.'
+      tags:
+        - tag: scope
+          value: backup-test
+    - uuid: 4d0d7758e75c4e0699e5aa6bc9972580
+      expression: 'now()-last(/PVE Restore Tester/pve.tests.generated)>3600'
+      name: 'Testador de restore parou de atualizar em {HOST.NAME}'
+      priority: HIGH
+      description: 'O tests.json nao e regravado ha mais de 1h (cron --refresh parou ou script com erro).'
+      tags:
+        - tag: scope
+          value: backup-test
+    - uuid: 75552870ca8041c1a7994dbf174adbbf
+      expression: 'nodata(/PVE Restore Tester/vfs.file.contents[/var/lib/pve-backup-monitor/tests.json],30m)=1'
+      name: 'Testador de restore sem dados em {HOST.NAME}'
+      priority: HIGH
+      description: 'O agente nao entregou o tests.json (arquivo ausente, agente fora ou testador nao instalado).'
+      tags:
+        - tag: scope
+          value: backup-test
+    - uuid: e85d6ff3637d40dea97bb6dcd9d39fc8
+      expression: 'now()-last(/PVE Restore Tester/pve.tests.last_run_ts)>432000'
+      name: 'Testador de restore sem rodar ha mais de 5 dias em {HOST.NAME}'
+      priority: WARNING
+      description: 'A execucao noturna (seg-qui 23:00) nao terminou nos ultimos 5 dias. Ver /var/log/pve-restore-tester.log.'
+      tags:
+        - tag: scope
+          value: backup-test
+    - uuid: 57f082db7aa44e589fa08fc170175d81
+      expression: 'last(/PVE Restore Tester/pve.tests.overdue)>0'
+      name: 'Backups sem teste recente em {HOST.NAME}'
+      priority: WARNING
+      description: 'Ha VMs cujo ultimo teste OK passou de 35 dias (ou que nunca foram testadas ha mais que isso).'
+      tags:
+        - tag: scope
+          value: backup-test

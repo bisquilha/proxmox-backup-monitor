@@ -1,0 +1,321 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: 40b97be82f63433a860593299737bd55
+      name: Templates/Homelab
+  templates:
+    - uuid: 647b53afc4db4beaa759567986195afd
+      template: 'PVE Backup Monitor'
+      name: 'PVE Backup Monitor'
+      description: |
+        Le o JSON gerado por /usr/local/bin/pve-backup-monitor.py (cron a cada 30 min) em cada
+        Proxmox via agent2 (vfs.file.contents) e descobre sozinho cada VM/CT do no, sem lista fixa.
+        Estado por guest: ok, isento, novo_sem_job, aguardando, falhou, stale, sem_backup, sem_job.
+        Isencao: tag 'sem-backup' na VM no Proxmox.
+      groups:
+        - name: Templates/Homelab
+      items:
+        - uuid: 5e2d83cdd20246c2b7b2ad3e0005dd20
+          name: 'PVE backup: JSON de status'
+          key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+          delay: 1m
+          history: 1d
+          trends: '0'
+          value_type: TEXT
+          description: 'Item mestre: todo o resto e derivado dele (dependent items).'
+          tags:
+            - tag: component
+              value: backup
+        - uuid: 4206b9afa72a4fcab31eb2646ccbe51c
+          name: 'PVE backup: gerado em'
+          type: DEPENDENT
+          key: 'pve.backup.generated'
+          delay: '0'
+          history: 7d
+          units: unixtime
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - "$.generated"
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+          tags:
+            - tag: component
+              value: backup
+        - uuid: bcad2ba44f234acd8c992d395a8b7538
+          name: 'PVE backup: guests com problema'
+          type: DEPENDENT
+          key: 'pve.backup.problems'
+          delay: '0'
+          history: 90d
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - "$.summary.problems"
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+          tags:
+            - tag: component
+              value: backup
+        - uuid: 0c20056f7aee4f2e8e4b6dfc4c6af026
+          name: 'PVE backup: jobs com erro nos ultimos 14 dias'
+          type: DEPENDENT
+          key: 'pve.backup.job_errors_14d'
+          delay: '0'
+          history: 90d
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - "$.summary.job_errors_14d"
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1h
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+          tags:
+            - tag: component
+              value: backup
+      discovery_rules:
+        - uuid: e047733281914494b0ca22a9cf20049c
+          name: 'PVE backup: guests'
+          type: DEPENDENT
+          key: pve.backup.guests.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 1ef90a5153ed4cdd99813256ad1fbafa
+              name: 'Backup {#NAME} ({#VMID}): estado'
+              type: DEPENDENT
+              key: 'pve.backup.state[{#VMID}]'
+              delay: '0'
+              history: 30d
+              trends: '0'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].state.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: 0460733b9c3f4839bf79bc6f8e4c5654
+              name: 'Backup {#NAME} ({#VMID}): severidade'
+              type: DEPENDENT
+              key: 'pve.backup.severity[{#VMID}]'
+              delay: '0'
+              history: 30d
+              value_type: UNSIGNED
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].severity.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: 4e95d2c5304e497faa9bea2b0bd11338
+              name: 'Backup {#NAME} ({#VMID}): idade do ultimo backup'
+              type: DEPENDENT
+              key: 'pve.backup.age_h[{#VMID}]'
+              delay: '0'
+              history: 30d
+              units: '!h'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].age_h.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '-1'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: b18bd4188778478390927fbb708e895d
+              name: 'Backup {#NAME} ({#VMID}): ultimo backup em'
+              type: DEPENDENT
+              key: 'pve.backup.last[{#VMID}]'
+              delay: '0'
+              history: 30d
+              value_type: UNSIGNED
+              units: unixtime
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].last_backup.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: 06123cfacb53499a850ddc37427a04e7
+              name: 'Backup {#NAME} ({#VMID}): tamanho do ultimo backup'
+              type: DEPENDENT
+              key: 'pve.backup.size_gb[{#VMID}]'
+              delay: '0'
+              history: 30d
+              units: '!GB'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].last_size_gb.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: c29a421d4c594aaca4c6911fdd316e14
+              name: 'Backup {#NAME} ({#VMID}): copias'
+              type: DEPENDENT
+              key: 'pve.backup.copies[{#VMID}]'
+              delay: '0'
+              history: 30d
+              value_type: UNSIGNED
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].copies.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: 7d1c0a52b9e84f3a8c6e2f4b1a9d3e05
+              name: 'Backup {#NAME} ({#VMID}): resultado do ultimo vzdump'
+              type: DEPENDENT
+              key: 'pve.backup.run_result[{#VMID}]'
+              delay: '0'
+              history: 30d
+              trends: '0'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].last_run_result.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: 2b8f6e41c3d7405a9e1b7c0d5f3a8e62
+              name: 'Backup {#NAME} ({#VMID}): ultimo vzdump em'
+              type: DEPENDENT
+              key: 'pve.backup.run_ts[{#VMID}]'
+              delay: '0'
+              history: 30d
+              value_type: UNSIGNED
+              units: unixtime
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].last_run_ts.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+            - uuid: 9e4a7c13d5b2486f8a0d1c6e3b7f9a24
+              name: 'Backup {#NAME} ({#VMID}): mensagem do ultimo vzdump'
+              type: DEPENDENT
+              key: 'pve.backup.run_msg[{#VMID}]'
+              delay: '0'
+              history: 30d
+              trends: '0'
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.guests[?(@.vmid=='{#VMID}')].last_run_msg.first()"
+                - type: JAVASCRIPT
+                  parameters:
+                    - 'return value === "" ? "-" : value;'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              master_item:
+                key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+              tags:
+                - tag: component
+                  value: backup
+          master_item:
+            key: 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.guests
+          lld_macro_paths:
+            - lld_macro: '{#VMID}'
+              path: $.vmid
+            - lld_macro: '{#NAME}'
+              path: $.name
+            - lld_macro: '{#NODE}'
+              path: $.node
+          trigger_prototypes:
+            - uuid: 4c620e37df274dd3a8a02b2411a0a97f
+              expression: 'last(/PVE Backup Monitor/pve.backup.severity[{#VMID}])>=2'
+              name: 'Backup com problema: {#NAME} ({HOST.NAME} / VMID {#VMID})'
+              priority: HIGH
+              description: 'Estado falhou, stale, sem_backup ou sem_job. Veja os itens de estado e de mensagem do ultimo vzdump desta VM.'
+              tags:
+                - tag: scope
+                  value: backup
+                - tag: vmid
+                  value: '{#VMID}'
+  triggers:
+    - uuid: 0cf2838524a74149aa80a151cacdd2dd
+      expression: 'now()-last(/PVE Backup Monitor/pve.backup.generated)>7200'
+      name: 'Monitor de backup parou de atualizar em {HOST.NAME}'
+      priority: HIGH
+      description: 'O JSON de status nao e regravado ha mais de 2h (cron parou ou o script esta falhando).'
+      tags:
+        - tag: scope
+          value: backup
+    - uuid: a1c39dd69f40491fbb71ac5500093017
+      expression: 'nodata(/PVE Backup Monitor/vfs.file.contents[/var/lib/pve-backup-monitor/status.json],30m)=1'
+      name: 'Monitor de backup sem dados em {HOST.NAME}'
+      priority: HIGH
+      description: 'O agente nao entregou o arquivo de status (agente fora, arquivo ausente ou ilegivel).'
+      tags:
+        - tag: scope
+          value: backup
+    - uuid: f84d83bdb2d74db78148309bf7246362
+      expression: 'last(/PVE Backup Monitor/pve.backup.job_errors_14d)>0'
+      name: 'Jobs de backup com erro nos ultimos 14 dias em {HOST.NAME}'
+      priority: WARNING
+      description: 'Pelo menos uma execucao de vzdump terminou com erro nas ultimas 2 semanas.'
+      tags:
+        - tag: scope
+          value: backup

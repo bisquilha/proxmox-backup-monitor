@@ -1,0 +1,583 @@
+apiVersion: 1
+groups:
+- orgId: 1
+  name: backup-proxmox
+  folder: GLPI Alerts
+  interval: 5m
+  rules:
+  - uid: bkp-vm-problema
+    title: Backup - VM com problema
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: zbx-db-ro
+      relativeTimeRange:
+        from: 600
+        to: 0
+      model:
+        datasource: &id002
+          type: grafana-postgresql-datasource
+          uid: zbx-db-ro
+        editorMode: code
+        format: time_series
+        rawQuery: true
+        rawSql: "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid =\
+          \ i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as\
+          \ (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests')\
+          \ as gg(g)\n)\nselect now() as time, p.value, p.host, p.vm, p.problema, p.ultimo, p.detalhe from (\n  select 1::float as value, host, regexp_replace(regexp_replace(g->>'name', '^SITE-HQ-', ''),\
+          \ '^SITE-', '') as vm,\n    case g->>'state' when 'sem_backup' then 'nunca teve backup' when 'stale' then 'backup atrasado'\n      when 'falhou' then 'ultimo backup falhou' when 'sem_job' then\
+          \ 'sem regra de backup' else g->>'state' end as problema,\n    case when (g->>'last_backup')::numeric > 0 then to_char((to_timestamp((g->>'last_backup')::numeric) at time zone 'UTC') - interval\
+          \ '3 hours', 'DD/MM/YYYY HH24:MI') else 'nunca' end as ultimo,\n    left(regexp_replace(coalesce(nullif(g->>'last_run_msg', ''), '-'), '[\\r\\n]+', ' ', 'g'), 100) as detalhe\n  from vms where\
+          \ (g->>'severity')::int >= 2\n  union all select 0::float, '-', '-', 'ok', '-', '-'\n) p"
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params: []
+            type: gt
+          operator:
+            type: and
+          query:
+            params: []
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: &id001
+          type: __expr__
+          uid: __expr__
+        expression: A
+        intervalMs: 1000
+        maxDataPoints: 43200
+        reducer: last
+        refId: B
+        type: reduce
+    - refId: C
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params:
+            - 0
+            type: gt
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: B
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: C
+        type: threshold
+    noDataState: KeepLast
+    execErrState: KeepLast
+    for: 10m
+    isPaused: false
+    annotations:
+      summary: '{{ $labels.vm }} ({{ $labels.host }}): {{ $labels.problema }}. Ultimo backup bom: {{ $labels.ultimo }}. Detalhe: {{ $labels.detalhe }}'
+    labels:
+      site: BACKUP
+      severity: critical
+    notification_settings:
+      receiver: GLPI
+  - uid: bkp-teste-restore
+    title: Backup - Teste de restore falhou
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: zbx-db-ro
+      relativeTimeRange:
+        from: 600
+        to: 0
+      model:
+        datasource: *id002
+        editorMode: code
+        format: time_series
+        rawQuery: true
+        rawSql: "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid =\
+          \ i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as\
+          \ (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests')\
+          \ as gg(g)\n)\n, tests as (\n  select lt.value::jsonb as doc\n  from items i\n  cross join lateral (\n    select h2.value from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch\
+          \ from now()) - 172800\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'\n), test_rows as (\n  select tt.t->>'host' as host,\
+          \ tt.t->>'vmid' as vmid, tt.t as t\n  from tests cross join lateral jsonb_array_elements(tests.doc->'tests') as tt(t)\n), tcls as (\n  select v.host as host, v.g as g, tr.t as t,\n  case\n   \
+          \ when not ((v.g->'tags') @> '\"testar\"'::jsonb) then 998\n    when v.g->>'state' = 'sem_job' then 998\n    when coalesce(tr.t->>'skip', '') in ('backup-antigo', 'sem-estado') then 998\n    when\
+          \ tr.t is null and v.g->>'state' in ('sem_backup', 'sem_job', 'novo_sem_job') then 998\n    when tr.t->>'last_result' = 'failed' then -1\n    when tr.t is null or (tr.t->>'last_ok_ts') is null\
+          \ then 999\n    else 0\n  end as code\n  from vms v\n  left join test_rows tr on tr.host = v.host and tr.vmid = v.g->>'vmid'\n  where v.g->>'state' <> 'isento'\n)\nselect now() as time, p.value,\
+          \ p.host, p.vm, p.nivel, p.detalhe from (\n  select 1::float as value, host, regexp_replace(regexp_replace(g->>'name', '^SITE-HQ-', ''), '^SITE-', '') as vm,\n    case when t->>'last_level' = 'restore'\
+          \ then 'restore de teste falhou' else 'verificacao do backup falhou' end as nivel,\n    left(regexp_replace(coalesce(nullif(t->>'last_msg', ''), '-'), '[\\r\\n]+', ' ', 'g'), 100) as detalhe\n\
+          \  from tcls where code = -1\n  union all select 0::float, '-', '-', 'ok', '-'\n) p"
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params: []
+            type: gt
+          operator:
+            type: and
+          query:
+            params: []
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: A
+        intervalMs: 1000
+        maxDataPoints: 43200
+        reducer: last
+        refId: B
+        type: reduce
+    - refId: C
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params:
+            - 0
+            type: gt
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: B
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: C
+        type: threshold
+    noDataState: KeepLast
+    execErrState: KeepLast
+    for: 10m
+    isPaused: false
+    annotations:
+      summary: '{{ $labels.vm }} ({{ $labels.host }}): {{ $labels.nivel }}. Detalhe: {{ $labels.detalhe }}'
+    labels:
+      site: BACKUP
+      severity: critical
+    notification_settings:
+      receiver: GLPI
+  - uid: bkp-job-erro
+    title: Backup - Ultima execucao do job com erro
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: zbx-db-ro
+      relativeTimeRange:
+        from: 600
+        to: 0
+      model:
+        datasource: *id002
+        editorMode: code
+        format: time_series
+        rawQuery: true
+        rawSql: "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid =\
+          \ i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as\
+          \ (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests')\
+          \ as gg(g)\n)\nselect now() as time, p.value, p.host, p.status from (\n  select 1::float as value, h.host as host, left(l.doc->'summary'->>'last_task_status', 60) as status\n  from latest l join\
+          \ items i on i.itemid = l.itemid join hosts h on h.hostid = i.hostid\n  where coalesce(l.doc->'summary'->>'last_task_status', '') not in ('', 'OK')\n  union all select 0::float, '-', 'ok'\n) p"
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params: []
+            type: gt
+          operator:
+            type: and
+          query:
+            params: []
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: A
+        intervalMs: 1000
+        maxDataPoints: 43200
+        reducer: last
+        refId: B
+        type: reduce
+    - refId: C
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params:
+            - 0
+            type: gt
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: B
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: C
+        type: threshold
+    noDataState: KeepLast
+    execErrState: KeepLast
+    for: 10m
+    isPaused: false
+    annotations:
+      summary: 'No {{ $labels.host }} a ultima execucao do job de backup terminou com: {{ $labels.status }}. Veja o log da tarefa vzdump no Proxmox.'
+    labels:
+      site: BACKUP
+      severity: warning
+    notification_settings:
+      receiver: GLPI
+  - uid: bkp-coleta-parada
+    title: Backup - Coleta do monitor parada
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: zbx-db-ro
+      relativeTimeRange:
+        from: 600
+        to: 0
+      model:
+        datasource: *id002
+        editorMode: code
+        format: time_series
+        rawQuery: true
+        rawSql: "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid =\
+          \ i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as\
+          \ (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests')\
+          \ as gg(g)\n)\nselect now() as time, p.value, p.host from (\n  select case when l.clock is null or extract(epoch from now()) - (l.doc->>'generated')::numeric > 7200\n              then 1::float\
+          \ else 0::float end as value, e.host as host\n  from (values ('pve1'), ('pve2'), ('pve3')) e(host)\n  left join (select h.host as host, l2.clock as clock, l2.doc as doc\n             from\
+          \ latest l2 join items i on i.itemid = l2.itemid join hosts h on h.hostid = i.hostid) l on l.host = e.host\n) p"
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params: []
+            type: gt
+          operator:
+            type: and
+          query:
+            params: []
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: A
+        intervalMs: 1000
+        maxDataPoints: 43200
+        reducer: last
+        refId: B
+        type: reduce
+    - refId: C
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params:
+            - 0
+            type: gt
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: B
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: C
+        type: threshold
+    noDataState: KeepLast
+    execErrState: KeepLast
+    for: 15m
+    isPaused: false
+    annotations:
+      summary: Os dados de backup do {{ $labels.host }} pararam de chegar ao Zabbix (monitor de backup ou Zabbix parados). Enquanto isso o painel de backups esta desatualizado.
+    labels:
+      site: BACKUP
+      severity: critical
+    notification_settings:
+      receiver: GLPI
+- orgId: 1
+  name: proxmox-infra
+  folder: GLPI Alerts
+  interval: 1m
+  rules:
+  - uid: pve-coleta-parada
+    title: Proxmox - Coleta parada (sem dados)
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: bfsa9hm2vclq8c
+      relativeTimeRange:
+        from: 600
+        to: 0
+      model:
+        application:
+          filter: ''
+        countTriggersBy: ''
+        datasource: &id003
+          type: alexanderzobnin-zabbix-datasource
+          uid: bfsa9hm2vclq8c
+        evaltype: '0'
+        functions: []
+        group:
+          filter: Linux servers
+        host:
+          filter: /^(pve1|pve2|pve3|pve4)$/
+        intervalMs: 1000
+        item:
+          filter: '/^Node \[[^\]]+\]: CPU utilization$/'
+        itemTag:
+          filter: ''
+        macro:
+          filter: ''
+        maxDataPoints: 43200
+        options:
+          count: false
+          disableDataAlignment: false
+          showDisabledItems: false
+          skipEmptyValues: false
+          useTrends: default
+          useZabbixValueMapping: false
+        proxy:
+          filter: ''
+        queryType: '0'
+        refId: A
+        resultFormat: time_series
+        schema: 12
+        table:
+          skipEmptyValues: false
+        tags:
+          filter: ''
+        textFilter: ''
+        trigger:
+          filter: ''
+    - refId: B
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params: []
+            type: gt
+          operator:
+            type: and
+          query:
+            params: []
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: A
+        intervalMs: 1000
+        maxDataPoints: 43200
+        reducer: last
+        refId: B
+        type: reduce
+    - refId: C
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params:
+            - 1000
+            type: gt
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: B
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: C
+        type: threshold
+    noDataState: Alerting
+    execErrState: Alerting
+    for: 10m
+    isPaused: false
+    annotations:
+      summary: 'Nenhum no Proxmox esta enviando CPU ao Zabbix ha mais de 10 minutos: coletor HTTP do Zabbix travado ou Zabbix fora do ar. Os paineis de Proxmox estao desatualizados.'
+    labels: &id004
+      site: INFRA
+      severity: critical
+    notification_settings:
+      receiver: GLPI
+  - uid: pve-no-fora
+    title: Proxmox - Servidor fora do ar
+    condition: C
+    data:
+    - refId: A
+      datasourceUid: bfsa9hm2vclq8c
+      relativeTimeRange:
+        from: 10800
+        to: 0
+      model:
+        application:
+          filter: ''
+        countTriggersBy: ''
+        datasource: *id003
+        evaltype: '0'
+        functions: []
+        group:
+          filter: Linux servers
+        host:
+          filter: /^(pve1|pve2|pve3|pve4)$/
+        intervalMs: 1000
+        item:
+          filter: '/^Cluster: Number of cluster nodes offline$/'
+        itemTag:
+          filter: ''
+        macro:
+          filter: ''
+        maxDataPoints: 43200
+        options:
+          count: false
+          disableDataAlignment: false
+          showDisabledItems: false
+          skipEmptyValues: false
+          useTrends: default
+          useZabbixValueMapping: false
+        proxy:
+          filter: ''
+        queryType: '0'
+        refId: A
+        resultFormat: time_series
+        schema: 12
+        table:
+          skipEmptyValues: false
+        tags:
+          filter: ''
+        textFilter: ''
+        trigger:
+          filter: ''
+    - refId: B
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params: []
+            type: gt
+          operator:
+            type: and
+          query:
+            params: []
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: A
+        intervalMs: 1000
+        maxDataPoints: 43200
+        reducer: last
+        refId: B
+        type: reduce
+    - refId: C
+      datasourceUid: __expr__
+      relativeTimeRange:
+        from: 0
+        to: 0
+      model:
+        conditions:
+        - evaluator:
+            params:
+            - 0
+            type: gt
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            params: []
+            type: last
+          type: query
+        datasource: *id001
+        expression: B
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: C
+        type: threshold
+    noDataState: KeepLast
+    execErrState: KeepLast
+    for: 5m
+    isPaused: false
+    annotations:
+      summary: 'Proxmox {{ $labels.host }}: {{ $values.B }} no(s) do cluster fora do ar.'
+    labels: *id004
+    notification_settings:
+      receiver: GLPI

@@ -1,0 +1,1496 @@
+{
+  "id": null,
+  "uid": "pve-backup-status-v2",
+  "title": "Backups Proxmox (v2)",
+  "tags": [
+    "backup",
+    "proxmox",
+    "zabbix",
+    "v2"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "SITUAÇÃO GERAL",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\n, tests as (\n  select lt.value::jsonb as doc\n  from items i\n  cross join lateral (\n    select h2.value from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 172800\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'\n), test_rows as (\n  select tt.t->>'host' as host, tt.t->>'vmid' as vmid, tt.t as t\n  from tests cross join lateral jsonb_array_elements(tests.doc->'tests') as tt(t)\n), tcls as (\n  select v.host as host, v.g as g, tr.t as t,\n  case\n    when not ((v.g->'tags') @> '\"testar\"'::jsonb) then 998\n    when v.g->>'state' = 'sem_job' then 998\n    when coalesce(tr.t->>'skip', '') in ('backup-antigo', 'sem-estado') then 998\n    when tr.t is null and v.g->>'state' in ('sem_backup', 'sem_job', 'novo_sem_job') then 998\n    when tr.t->>'last_result' = 'failed' then -1\n    when tr.t is null or (tr.t->>'last_ok_ts') is null then 999\n    else least(floor((extract(epoch from now()) - (tr.t->>'last_ok_ts')::numeric) / 86400)::int, 899)\n  end as code,\n  case\n    when coalesce(tr.t->>'restore_ok', 'false') = 'true'\n         and (coalesce(tr.t->>'integrity_ok', 'false') <> 'true'\n              or coalesce((tr.t->>'restore_ts')::numeric, 0) >= coalesce((tr.t->>'integrity_ts')::numeric, 0)) then 'R'\n    when coalesce(tr.t->>'integrity_ok', 'false') = 'true' then 'I'\n  end as lvl\n  from vms v\n  left join test_rows tr on tr.host = v.host and tr.vmid = v.g->>'vmid'\n  where v.g->>'state' <> 'isento'\n)\nselect (\n  (select count(*) from vms where (g->>'severity')::int >= 2)\n  + (select count(*) from tcls where code = -1)\n  + (select count(*) from latest where extract(epoch from now()) - (doc->>'generated')::numeric > 7200)\n  + case when (select count(*) from latest) = 0 then 1000 else 0 end\n)::int as \"Situação\" ",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "TUDO OK",
+                  "color": "#2E9E6B",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1000,
+                "to": 100000,
+                "result": {
+                  "text": "SEM DADOS",
+                  "color": "#D64545",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#D64545",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "suffix: com problema"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 30
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "PROBLEMAS AGORA (backup e teste de restore)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 18,
+        "x": 6,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\n, tests as (\n  select lt.value::jsonb as doc\n  from items i\n  cross join lateral (\n    select h2.value from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 172800\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'\n), test_rows as (\n  select tt.t->>'host' as host, tt.t->>'vmid' as vmid, tt.t as t\n  from tests cross join lateral jsonb_array_elements(tests.doc->'tests') as tt(t)\n), tcls as (\n  select v.host as host, v.g as g, tr.t as t,\n  case\n    when not ((v.g->'tags') @> '\"testar\"'::jsonb) then 998\n    when v.g->>'state' = 'sem_job' then 998\n    when coalesce(tr.t->>'skip', '') in ('backup-antigo', 'sem-estado') then 998\n    when tr.t is null and v.g->>'state' in ('sem_backup', 'sem_job', 'novo_sem_job') then 998\n    when tr.t->>'last_result' = 'failed' then -1\n    when tr.t is null or (tr.t->>'last_ok_ts') is null then 999\n    else least(floor((extract(epoch from now()) - (tr.t->>'last_ok_ts')::numeric) / 86400)::int, 899)\n  end as code,\n  case\n    when coalesce(tr.t->>'restore_ok', 'false') = 'true'\n         and (coalesce(tr.t->>'integrity_ok', 'false') <> 'true'\n              or coalesce((tr.t->>'restore_ts')::numeric, 0) >= coalesce((tr.t->>'integrity_ts')::numeric, 0)) then 'R'\n    when coalesce(tr.t->>'integrity_ok', 'false') = 'true' then 'I'\n  end as lvl\n  from vms v\n  left join test_rows tr on tr.host = v.host and tr.vmid = v.g->>'vmid'\n  where v.g->>'state' <> 'isento'\n)\nselect \"VM\", \"Host\", \"Problema\", \"Último backup OK\", \"Detalhe\" from (\n  select g->>'name' as \"VM\", host as \"Host\",\n    case g->>'state'\n      when 'sem_backup' then 'NUNCA TEVE BACKUP'\n      when 'stale' then 'BACKUP ATRASADO'\n      when 'falhou' then 'ÚLTIMO BACKUP FALHOU'\n      when 'sem_job' then 'SEM REGRA DE BACKUP'\n      else g->>'state' end as \"Problema\",\n    case when (g->>'last_backup')::numeric > 0\n      then to_char((to_timestamp((g->>'last_backup')::numeric) at time zone 'UTC') - interval '3 hours', 'DD/MM/YYYY HH24:MI')\n      else 'nunca' end as \"Último backup OK\",\n    coalesce(nullif(g->>'last_run_msg', ''), '') as \"Detalhe\",\n    (g->>'severity')::int as sev, (g->>'vmid')::int as vmid\n  from vms where (g->>'severity')::int >= 2\n  union all\n  select g->>'name', host,\n    case when t->>'last_level' = 'restore' then 'RESTORE DE TESTE FALHOU' else 'VERIFICAÇÃO DO BACKUP FALHOU' end,\n    case when (g->>'last_backup')::numeric > 0\n      then to_char((to_timestamp((g->>'last_backup')::numeric) at time zone 'UTC') - interval '3 hours', 'DD/MM/YYYY HH24:MI')\n      else 'nunca' end,\n    coalesce(nullif(t->>'last_msg', ''), ''), 2, (g->>'vmid')::int\n  from tcls where code = -1\n  union all\n  select 'Nenhuma VM com problema', '', 'TUDO CERTO', '', '', -1, 0\n  where not exists (select 1 from vms where (g->>'severity')::int >= 2)\n    and not exists (select 1 from tcls where code = -1)\n) p\norder by sev desc, \"Host\", vmid\nlimit 10",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "noValue": "-",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Problema"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "TUDO CERTO": {
+                        "text": "TUDO CERTO",
+                        "color": "#2E9E6B",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#D64545",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VM"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Problema"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Último backup OK"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "VMs com backup OK",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\nselect count(*)::int as \"VMs com backup OK\" from vms where g->>'state' = 'ok'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#D64545",
+                "value": null
+              },
+              {
+                "color": "#2E9E6B",
+                "value": 1
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Aguardando 1º backup / novas",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 6,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\nselect count(*)::int as \"Aguardando\" from vms where g->>'state' in ('aguardando', 'novo_sem_job')",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5C6773",
+                "value": null
+              },
+              {
+                "color": "#D9A441",
+                "value": 1
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Isentas (sem backup de propósito)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 12,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\nselect count(*)::int as \"Isentas\" from vms where g->>'state' = 'isento'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5C6773",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Jobs com erro (últimos 14 dias)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\nselect coalesce(sum((l.doc->'summary'->>'job_errors_14d')::int), 0)::int as \"Jobs com erro\" from latest l",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#2E9E6B",
+                "value": null
+              },
+              {
+                "color": "#D64545",
+                "value": 1
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "HOSTS E JOBS DE BACKUP",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Coleta por host (o monitor está vivo?)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\nselect h.host as \"Host\",\n  (l.doc->>'version')::int as \"Coletor\",\n  (l.doc->'summary'->>'guests')::int as \"VMs\",\n  (l.doc->'summary'->>'problems')::int as \"Com problema\",\n  round(((extract(epoch from now()) - (l.doc->>'generated')::numeric) / 60)::numeric, 0)::int as \"Última coleta há\"\nfrom latest l\njoin items i on i.itemid = l.itemid\njoin hosts h on h.hostid = i.hostid\norder by h.host",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "noValue": "-",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Coletor"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VMs"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Com problema"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Com problema"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#2E9E6B",
+                      "value": null
+                    },
+                    {
+                      "color": "#D64545",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Última coleta há"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "m"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#2E9E6B",
+                      "value": null
+                    },
+                    {
+                      "color": "#D9A441",
+                      "value": 90
+                    },
+                    {
+                      "color": "#D64545",
+                      "value": 120
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Jobs de backup (quando rodam e quais VMs cobrem)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\nselect h.host as \"Host\",\n  case\n    when jj.job->>'schedule' ~ '^\\d{2}:\\d{2}$' then 'todo dia às ' || (jj.job->>'schedule')\n    when jj.job->>'schedule' ~ '^(mon|tue|wed|thu|fri|sat|sun) \\d{2}:\\d{2}$' then\n      (case split_part(jj.job->>'schedule', ' ', 1) when 'mon' then 'segunda' when 'tue' then 'terça' when 'wed' then 'quarta'\n         when 'thu' then 'quinta' when 'fri' then 'sexta' when 'sat' then 'sábado' else 'domingo' end)\n      || ' às ' || split_part(jj.job->>'schedule', ' ', 2)\n    when jj.job->>'schedule' ~ '^\\*-\\*-\\d{2} \\d{2}:\\d{2}$' then\n      'dia ' || ltrim(substr(jj.job->>'schedule', 5, 2), '0') || ' de cada mês às ' || split_part(jj.job->>'schedule', ' ', 2)\n    else jj.job->>'schedule' end as \"Quando\",\n  coalesce((select string_agg(regexp_replace(regexp_replace(vv.g->>'name', '^SITE-HQ-', ''), '^SITE-', ''), ', ' order by (vv.g->>'vmid')::int)\n            from vms vv where vv.host = h.host and vv.g->'jobs' @> to_jsonb(jj.job->>'id')),\n           jj.job->>'scope') as \"VMs no job\",\n  case when (jj.job->>'enabled')::boolean then 'sim' else 'NÃO' end as \"Ativo\",\n  case when (jj.job->>'mailto')::boolean then 'sim' else 'NÃO' end as \"Avisa por e-mail\",\n  left(replace(jj.job->>'id', 'backup-', ''), 8) as \"ID do job\"\nfrom latest l\njoin items i on i.itemid = l.itemid\njoin hosts h on h.hostid = i.hostid\ncross join lateral jsonb_array_elements(l.doc->'jobs') as jj(job)\norder by h.host, jj.job->>'schedule', jj.job->>'id'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "noValue": "-",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quando"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 210
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ativo"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Avisa por e-mail"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ID do job"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VMs no job"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ativo"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "sim": {
+                        "text": "sim",
+                        "color": "#2E9E6B",
+                        "index": 0
+                      },
+                      "NÃO": {
+                        "text": "NÃO",
+                        "color": "#D64545",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Avisa por e-mail"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "sim": {
+                        "text": "sim",
+                        "color": "#2E9E6B",
+                        "index": 0
+                      },
+                      "NÃO": {
+                        "text": "NÃO",
+                        "color": "#D64545",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "TODAS AS VMs",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Estado do backup e do teste de restore de cada VM",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "zbx-db-ro"
+      },
+      "gridPos": {
+        "h": 28,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\n, tests as (\n  select lt.value::jsonb as doc\n  from items i\n  cross join lateral (\n    select h2.value from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 172800\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/tests.json]'\n), test_rows as (\n  select tt.t->>'host' as host, tt.t->>'vmid' as vmid, tt.t as t\n  from tests cross join lateral jsonb_array_elements(tests.doc->'tests') as tt(t)\n), tcls as (\n  select v.host as host, v.g as g, tr.t as t,\n  case\n    when not ((v.g->'tags') @> '\"testar\"'::jsonb) then 998\n    when v.g->>'state' = 'sem_job' then 998\n    when coalesce(tr.t->>'skip', '') in ('backup-antigo', 'sem-estado') then 998\n    when tr.t is null and v.g->>'state' in ('sem_backup', 'sem_job', 'novo_sem_job') then 998\n    when tr.t->>'last_result' = 'failed' then -1\n    when tr.t is null or (tr.t->>'last_ok_ts') is null then 999\n    else least(floor((extract(epoch from now()) - (tr.t->>'last_ok_ts')::numeric) / 86400)::int, 899)\n  end as code,\n  case\n    when coalesce(tr.t->>'restore_ok', 'false') = 'true'\n         and (coalesce(tr.t->>'integrity_ok', 'false') <> 'true'\n              or coalesce((tr.t->>'restore_ts')::numeric, 0) >= coalesce((tr.t->>'integrity_ts')::numeric, 0)) then 'R'\n    when coalesce(tr.t->>'integrity_ok', 'false') = 'true' then 'I'\n  end as lvl\n  from vms v\n  left join test_rows tr on tr.host = v.host and tr.vmid = v.g->>'vmid'\n  where v.g->>'state' <> 'isento'\n)\nselect v.g->>'name' as \"VM\",\n  v.host as \"Host\",\n  v.g->>'state' as \"Backup\",\n  case when (v.g->>'last_backup')::numeric > 0 then to_timestamp((v.g->>'last_backup')::numeric) end as \"Último backup\",\n  case when coalesce((v.g->>'age_h')::numeric, -1) < 0 then null\n       when (v.g->>'age_h')::numeric < 48 then round((v.g->>'age_h')::numeric)::int || ' h'\n       else round((v.g->>'age_h')::numeric / 24, 1) || ' dias' end as \"Há\",\n  case when coalesce((v.g->>'threshold_h')::numeric, -1) < 0 then null\n       when (v.g->>'threshold_h')::numeric < 48 then round((v.g->>'threshold_h')::numeric)::int || ' h'\n       else round((v.g->>'threshold_h')::numeric / 24, 0) || ' dias' end as \"Alerta após\",\n  (v.g->>'copies')::int as \"Cópias no NAS\",\n  (v.g->>'last_size_gb')::numeric as \"Tamanho do último\",\n  case when tc.code is null or tc.code = 998 then 'NÃO TESTA'\n       when tc.code = 999 then 'NUNCA TESTADA'\n       when tc.code = -1 then 'FALHOU'\n       when tc.lvl = 'I' then 'INTEGRIDADE OK'\n       else 'RESTORE OK' end as \"Teste do backup\",\n  case when tc.code between 0 and 899 then tc.code || case when tc.code = 1 then ' dia' else ' dias' end end as \"Testado há\"\nfrom vms v\nleft join tcls tc on tc.host = v.host and tc.g->>'vmid' = v.g->>'vmid'\norder by (v.g->>'severity')::int desc, case when v.g->>'state' = 'isento' then 1 else 0 end, v.host, (v.g->>'vmid')::int",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "noValue": "-",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VM"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Backup"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Último backup"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Há"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Alerta após"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cópias no NAS"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tamanho do último"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Teste do backup"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Testado há"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Backup"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ok": {
+                        "text": "OK",
+                        "color": "#2E9E6B",
+                        "index": 0
+                      },
+                      "isento": {
+                        "text": "ISENTO",
+                        "color": "#5C6773",
+                        "index": 1
+                      },
+                      "aguardando": {
+                        "text": "AGUARDANDO",
+                        "color": "#D9A441",
+                        "index": 2
+                      },
+                      "novo_sem_job": {
+                        "text": "NOVO, SEM JOB",
+                        "color": "#D9A441",
+                        "index": 3
+                      },
+                      "falhou": {
+                        "text": "FALHOU",
+                        "color": "#D64545",
+                        "index": 4
+                      },
+                      "stale": {
+                        "text": "ATRASADO",
+                        "color": "#D64545",
+                        "index": 5
+                      },
+                      "sem_backup": {
+                        "text": "SEM BACKUP",
+                        "color": "#D64545",
+                        "index": 6
+                      },
+                      "sem_job": {
+                        "text": "SEM JOB",
+                        "color": "#D64545",
+                        "index": 7
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Teste do backup"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "RESTORE OK": {
+                        "text": "RESTORE OK",
+                        "color": "#2E9E6B",
+                        "index": 0
+                      },
+                      "INTEGRIDADE OK": {
+                        "text": "INTEGRIDADE OK",
+                        "color": "#3F7FBF",
+                        "index": 1
+                      },
+                      "FALHOU": {
+                        "text": "FALHOU",
+                        "color": "#D64545",
+                        "index": 2
+                      },
+                      "NUNCA TESTADA": {
+                        "text": "NUNCA TESTADA",
+                        "color": "#D9A441",
+                        "index": 3
+                      },
+                      "NÃO TESTA": {
+                        "text": "NÃO TESTA",
+                        "color": "#5C6773",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Último backup"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tamanho do último"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decgbytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tamanho do último"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "DETALHES TÉCNICOS (VMID, job completo, mensagem do vzdump)",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "panels": [
+        {
+          "id": 13,
+          "type": "table",
+          "title": "Último vzdump de cada VM",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "zbx-db-ro"
+          },
+          "gridPos": {
+            "h": 14,
+            "w": 24,
+            "x": 0,
+            "y": 46
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "zbx-db-ro"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "with latest as (\n  select i.itemid, lt.value::jsonb as doc, lt.clock\n  from items i\n  cross join lateral (\n    select h2.value, h2.clock from history_text h2\n    where h2.itemid = i.itemid and h2.clock > extract(epoch from now()) - 86400\n    order by h2.clock desc limit 1\n  ) lt\n  where i.key_ = 'vfs.file.contents[/var/lib/pve-backup-monitor/status.json]'\n), vms as (\n  select h.host as host, gg.g as g\n  from latest l\n  join items i on i.itemid = l.itemid\n  join hosts h on h.hostid = i.hostid\n  cross join lateral jsonb_array_elements(l.doc->'guests') as gg(g)\n)\nselect host as \"Host\",\n  g->>'vmid' as \"VMID\",\n  g->>'name' as \"VM\",\n  g->>'status' as \"Máquina\",\n  g->'jobs'->>0 as \"Job (ID completo)\",\n  g->>'last_run_result' as \"Última execução do job\",\n  case when (g->>'last_run_ts')::numeric > 0 then to_timestamp((g->>'last_run_ts')::numeric) end as \"Executado em\",\n  nullif(g->>'last_run_msg', '') as \"Mensagem do vzdump\"\nfrom vms\norder by host, (g->>'vmid')::int",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "filterable": false
+              },
+              "noValue": "-",
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Host"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 130
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "VMID"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 80
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "VM"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 200
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Máquina"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Última execução do job"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 170
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Executado em"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 170
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Última execução do job"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background",
+                      "mode": "basic"
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "ok": {
+                            "text": "ok",
+                            "color": "#2E9E6B",
+                            "index": 0
+                          },
+                          "failed": {
+                            "text": "FALHOU",
+                            "color": "#D64545",
+                            "index": 1
+                          },
+                          "none": {
+                            "text": "-",
+                            "color": "#5C6773",
+                            "index": 2
+                          },
+                          "running": {
+                            "text": "rodando",
+                            "color": "#3F7FBF",
+                            "index": 3
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Executado em"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsLocal"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "description": "Estado do backup e do teste de restore de cada VM/CT dos Proxmox (pve1, pve2, pve3), lido do JSON do pve-backup-monitor e do testador no Zabbix. Mesmos dados do painel anterior, em layout novo."
+}
