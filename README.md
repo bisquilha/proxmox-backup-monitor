@@ -1,6 +1,6 @@
 # Proxmox Backup Monitor & Automated Restore Tester
 
-[![tests](https://github.com/bisquilha/proxmox-backup-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/bisquilha/proxmox-backup-monitor/actions/workflows/tests.yml)
+[![tests](https://github.com/gabrielsilva-it/proxmox-backup-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/gabrielsilva-it/proxmox-backup-monitor/actions/workflows/tests.yml)
 
 > A backup that was never restored is just a hope.
 
