@@ -15,6 +15,12 @@ Built and running in production at a manufacturing company with multiple sites a
 
 ---
 
+## Screenshot
+
+Grafana dashboard with demo data (fictitious hosts and VMs): overall state, problems right now, collection per host, backup jobs, and the backup and restore-test state of every VM.
+
+![Proxmox backup dashboard in Grafana](docs/screenshots/backup-dashboard.jpg)
+
 ## Architecture
 
 ```mermaid
